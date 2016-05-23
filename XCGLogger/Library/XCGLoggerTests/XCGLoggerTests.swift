@@ -61,7 +61,7 @@ class XCGLoggerTests: XCTestCase {
         let log = XCGLogger.defaultInstance()
         let logDestinationCountAtStart = log.logDestinations.count
 
-        let additionalConsoleLogger = XCGConsoleLogDestination(owner: log, identifier: testIdentifier)
+        let additionalConsoleLogger = XCGConsoleLogDestination(identifier: testIdentifier)
 
         let additionSuccess = log.addLogDestination(additionalConsoleLogger)
         let logDestinationCountAfterAddition = log.logDestinations.count
@@ -79,8 +79,8 @@ class XCGLoggerTests: XCTestCase {
 
         let log = XCGLogger.defaultInstance()
 
-        let additionalConsoleLogger = XCGConsoleLogDestination(owner: log, identifier: testIdentifier)
-        let additionalConsoleLogger2 = XCGConsoleLogDestination(owner: log, identifier: testIdentifier)
+        let additionalConsoleLogger = XCGConsoleLogDestination(identifier: testIdentifier)
+        let additionalConsoleLogger2 = XCGConsoleLogDestination(identifier: testIdentifier)
 
         let additionSuccess = log.addLogDestination(additionalConsoleLogger)
         let logDestinationCountAfterAddition = log.logDestinations.count
@@ -190,7 +190,7 @@ class XCGLoggerTests: XCTestCase {
 
     func testBackgroundLogging() {
         let log: XCGLogger = XCGLogger(identifier: "com.cerebralgardens.xcglogger.testBackgroundLogging", includeDefaultDestinations: false)
-        let systemLogDestination = XCGNSLogDestination(owner: log, identifier: "com.cerebralgardens.xcglogger.testBackgroundLogging.systemLogDestination")
+        let systemLogDestination = XCGNSLogDestination(identifier: "com.cerebralgardens.xcglogger.testBackgroundLogging.systemLogDestination")
         systemLogDestination.outputLogLevel = .Debug
         systemLogDestination.showThreadName = true
         // Note: The thread name included in the log message should be "main" even though the log is processed in a background thread. This is because
@@ -205,11 +205,11 @@ class XCGLoggerTests: XCTestCase {
     }
 
     func testDateFormatterIsCached() {
-        let log: XCGLogger = XCGLogger()
-        log.identifier = "com.cerebralgardens.xcglogger.testDateFormatterIsCached"
-
-        let dateFormatter1 = log.dateFormatter
-        let dateFormatter2 = log.dateFormatter
+        
+        let systemLogDestination = XCGNSLogDestination(identifier: "com.cerebralgardens.xcglogger.testDateFormatterIsCached.systemLogDestination")
+        
+        let dateFormatter1 = systemLogDestination.dateFormatter
+        let dateFormatter2 = systemLogDestination.dateFormatter
 
         XCTAssert(dateFormatter1 == dateFormatter2, "Fail: Received two different date formatter objects")
     }
@@ -219,19 +219,26 @@ class XCGLoggerTests: XCTestCase {
         log.identifier = "com.cerebralgardens.xcglogger.testCustomDateFormatter"
         log.outputLogLevel = .Debug
 
-        let defaultDateFormatter = log.dateFormatter
+        XCTAssertEqual(log.logDestinations.count, 1)
+        
+        guard var destination = log.logDestinations.first else {
+            XCTAssert(false, "No log destination found.")
+            return
+        }
+        
+        let defaultDateFormatter = destination.dateFormatter
 
         let dateFormat = "MM/dd/yyyy hh:mma"
 
         let dateFormatter = NSDateFormatter()
         dateFormatter.dateFormat = dateFormat
 
-        log.dateFormatter = dateFormatter
+        destination.dateFormatter = dateFormatter
 
         log.debug("Test date format is different than our default")
 
-        XCTAssertNotNil(log.dateFormatter, "Fail: date formatter is nil")
-        XCTAssertEqual(log.dateFormatter!.dateFormat, dateFormat, "Fail: date format doesn't match our custom date format")
+        XCTAssertNotNil(destination.dateFormatter, "Fail: date formatter is nil")
+        XCTAssertEqual(destination.dateFormatter.dateFormat, dateFormat, "Fail: date format doesn't match our custom date format")
         XCTAssert(defaultDateFormatter != dateFormatter, "Fail: Did not assign a custom date formatter")
     }
 }

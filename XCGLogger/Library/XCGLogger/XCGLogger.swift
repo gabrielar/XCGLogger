@@ -17,40 +17,46 @@ import Foundation
 // MARK: - XCGLogDetails
 // - Data structure to hold all info about a log message, passed to log destination classes
 public struct XCGLogDetails {
+    public var logger: XCGLogger
     public var logLevel: XCGLogger.LogLevel
     public var date: NSDate
     public var logMessage: String
     public var functionName: String
     public var fileName: String
     public var lineNumber: Int
+}
 
-    public init(logLevel: XCGLogger.LogLevel, date: NSDate, logMessage: String, functionName: String, fileName: String, lineNumber: Int) {
-        self.logLevel = logLevel
-        self.date = date
-        self.logMessage = logMessage
-        self.functionName = functionName
-        self.fileName = fileName
-        self.lineNumber = lineNumber
-    }
+
+private struct XCGLogDestinationConstants {
+    static let DefaultXcodeColors: [XCGLogger.LogLevel: XCGLogger.XcodeColor] = [
+        .Verbose: .lightGrey,
+        .Debug: .darkGrey,
+        .Info: .blue,
+        .Warning: .orange,
+        .Error: .red,
+        .Severe: .whiteOnRed
+    ]
 }
 
 // MARK: - XCGLogDestinationProtocol
 // - Protocol for output classes to conform to
 public protocol XCGLogDestinationProtocol: CustomDebugStringConvertible {
-    var owner: XCGLogger {get set}
     var identifier: String {get set}
     var outputLogLevel: XCGLogger.LogLevel {get set}
-
+    var dateFormatter: NSDateFormatter {get set}
+    
     func processLogDetails(logDetails: XCGLogDetails)
     func processInternalLogDetails(logDetails: XCGLogDetails) // Same as processLogDetails but should omit function/file/line info
     func isEnabledForLogLevel(logLevel: XCGLogger.LogLevel) -> Bool
+    
+    func willBeAddedToLogger(logger: XCGLogger)
+    func hasBeenAddedToLogger(logger: XCGLogger)
 }
 
 // MARK: - XCGBaseLogDestination
 // - A base class log destination that doesn't actually output the log anywhere and is intented to be subclassed
 public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugStringConvertible {
     // MARK: - Properties
-    public var owner: XCGLogger
     public var identifier: String
     public var outputLogLevel: XCGLogger.LogLevel = .Debug
 
@@ -61,6 +67,15 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
     public var showLineNumber: Bool = true
     public var showLogLevel: Bool = true
     public var showDate: Bool = true
+    
+    
+    public lazy var dateFormatter: NSDateFormatter = {
+        let defaultDateFormatter = NSDateFormatter()
+        defaultDateFormatter.locale = NSLocale.currentLocale()
+        defaultDateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return defaultDateFormatter
+    }()
+
 
     // MARK: - CustomDebugStringConvertible
     public var debugDescription: String {
@@ -70,8 +85,7 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
     }
 
     // MARK: - Life Cycle
-    public init(owner: XCGLogger, identifier: String = "") {
-        self.owner = owner
+    public init(identifier: String = "") {
         self.identifier = identifier
     }
 
@@ -80,11 +94,7 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
         var extendedDetails: String = ""
 
         if showDate {
-            var formattedDate: String = logDetails.date.description
-            if let dateFormatter = owner.dateFormatter {
-                formattedDate = dateFormatter.stringFromDate(logDetails.date)
-            }
-
+            let formattedDate = self.dateFormatter.stringFromDate(logDetails.date)
             extendedDetails += "\(formattedDate) "
         }
 
@@ -93,7 +103,7 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
         }
 
         if showLogIdentifier {
-            extendedDetails += "[\(owner.identifier)] "
+            extendedDetails += "[\(logDetails.logger.identifier)] "
         }
 
         if showThreadName {
@@ -131,11 +141,7 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
         var extendedDetails: String = ""
 
         if showDate {
-            var formattedDate: String = logDetails.date.description
-            if let dateFormatter = owner.dateFormatter {
-                formattedDate = dateFormatter.stringFromDate(logDetails.date)
-            }
-
+            let formattedDate = self.dateFormatter.stringFromDate(logDetails.date)
             extendedDetails += "\(formattedDate) "
         }
 
@@ -144,7 +150,7 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
         }
 
         if showLogIdentifier {
-            extendedDetails += "[\(owner.identifier)] "
+            extendedDetails += "[\(logDetails.logger.identifier)] "
         }
 
         output(logDetails, text: "\(extendedDetails)> \(logDetails.logMessage)")
@@ -160,6 +166,12 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
         // Do something with the text in an overridden version of this method
         precondition(false, "Must override this")
     }
+    
+    public func willBeAddedToLogger(logger: XCGLogger) {
+    }
+    
+    public func hasBeenAddedToLogger(logger: XCGLogger) {
+    }
 }
 
 // MARK: - XCGConsoleLogDestination
@@ -167,14 +179,16 @@ public class XCGBaseLogDestination: XCGLogDestinationProtocol, CustomDebugString
 public class XCGConsoleLogDestination: XCGBaseLogDestination {
     // MARK: - Properties
     public var logQueue: dispatch_queue_t? = nil
-    public var xcodeColors: [XCGLogger.LogLevel: XCGLogger.XcodeColor]? = nil
+    public var xcodeColorsEnabled: Bool = false
+    public var xcodeColors = XCGLogDestinationConstants.DefaultXcodeColors
+
 
     // MARK: - Misc Methods
     public override func output(logDetails: XCGLogDetails, text: String) {
 
         let outputClosure = {
             let adjustedText: String
-            if let xcodeColor = (self.xcodeColors ?? self.owner.xcodeColors)[logDetails.logLevel] where self.owner.xcodeColorsEnabled {
+            if let xcodeColor = self.xcodeColors[logDetails.logLevel] where self.xcodeColorsEnabled {
                 adjustedText = "\(xcodeColor.format())\(text)\(XCGLogger.XcodeColor.reset)"
             }
             else {
@@ -191,6 +205,15 @@ public class XCGConsoleLogDestination: XCGBaseLogDestination {
             outputClosure()
         }
     }
+    
+    public override func willBeAddedToLogger(logger: XCGLogger) {
+        super.willBeAddedToLogger(logger)
+        
+        // Check if XcodeColors is installed and enabled
+        if let xcodeColors = NSProcessInfo.processInfo().environment["XcodeColors"] {
+            xcodeColorsEnabled = xcodeColors == "YES"
+        }
+    }
 }
 
 // MARK: - XCGNSLogDestination
@@ -198,7 +221,8 @@ public class XCGConsoleLogDestination: XCGBaseLogDestination {
 public class XCGNSLogDestination: XCGBaseLogDestination {
     // MARK: - Properties
     public var logQueue: dispatch_queue_t? = nil
-    public var xcodeColors: [XCGLogger.LogLevel: XCGLogger.XcodeColor]? = nil
+    public var xcodeColorsEnabled: Bool = false
+    public var xcodeColors = XCGLogDestinationConstants.DefaultXcodeColors
 
     public override var showDate: Bool {
         get {
@@ -214,7 +238,7 @@ public class XCGNSLogDestination: XCGBaseLogDestination {
 
         let outputClosure = {
             let adjustedText: String
-            if let xcodeColor = (self.xcodeColors ?? self.owner.xcodeColors)[logDetails.logLevel] where self.owner.xcodeColorsEnabled {
+            if let xcodeColor = self.xcodeColors[logDetails.logLevel] where self.xcodeColorsEnabled {
                 adjustedText = "\(xcodeColor.format())\(text)\(XCGLogger.XcodeColor.reset)"
             }
             else {
@@ -231,6 +255,15 @@ public class XCGNSLogDestination: XCGBaseLogDestination {
             outputClosure()
         }
     }
+    
+    public override func willBeAddedToLogger(logger: XCGLogger) {
+        super.willBeAddedToLogger(logger)
+        
+        // Check if XcodeColors is installed and enabled
+        if let xcodeColors = NSProcessInfo.processInfo().environment["XcodeColors"] {
+            xcodeColorsEnabled = xcodeColors == "YES"
+        }
+    }
 }
 
 // MARK: - XCGFileLogDestination
@@ -240,14 +273,14 @@ public class XCGFileLogDestination: XCGBaseLogDestination {
     public var logQueue: dispatch_queue_t? = nil
     private var writeToFileURL: NSURL? = nil {
         didSet {
-            openFile()
+            logFileHandle?.synchronizeFile()
         }
     }
     private var logFileHandle: NSFileHandle? = nil
 
     // MARK: - Life Cycle
     public init(owner: XCGLogger, writeToFile: AnyObject, identifier: String = "") {
-        super.init(owner: owner, identifier: identifier)
+        super.init(identifier: identifier)
 
         if writeToFile is NSString {
             writeToFileURL = NSURL.fileURLWithPath(writeToFile as! String)
@@ -258,8 +291,6 @@ public class XCGFileLogDestination: XCGBaseLogDestination {
         else {
             writeToFileURL = nil
         }
-
-        openFile()
     }
 
     deinit {
@@ -268,7 +299,7 @@ public class XCGFileLogDestination: XCGBaseLogDestination {
     }
 
     // MARK: - File Handling Methods
-    private func openFile() {
+    private func openFile(logger: XCGLogger) {
         if logFileHandle != nil {
             closeFile()
         }
@@ -281,15 +312,15 @@ public class XCGFileLogDestination: XCGBaseLogDestination {
                 logFileHandle = try NSFileHandle(forWritingToURL: writeToFileURL)
             }
             catch let error as NSError {
-                owner._logln("Attempt to open log file for writing failed: \(error.localizedDescription)", logLevel: .Error)
+                logger._logln("Attempt to open log file for writing failed: \(error.localizedDescription)", logLevel: .Error)
                 logFileHandle = nil
                 return
             }
 
-            owner.logAppDetails(self)
+            logger.logAppDetails(self)
 
-            let logDetails = XCGLogDetails(logLevel: .Info, date: NSDate(), logMessage: "XCGLogger writing to log to: \(writeToFileURL)", functionName: "", fileName: "", lineNumber: 0)
-            owner._logln(logDetails.logMessage, logLevel: logDetails.logLevel)
+            let logDetails = XCGLogDetails(logger: logger, logLevel: .Info, date: NSDate(), logMessage: "XCGLogger writing to log to: \(writeToFileURL)", functionName: "", fileName: "", lineNumber: 0)
+            logger._logln(logDetails.logMessage, logLevel: logDetails.logLevel)
             processInternalLogDetails(logDetails)
         }
     }
@@ -314,6 +345,11 @@ public class XCGFileLogDestination: XCGBaseLogDestination {
         else {
             outputClosure()
         }
+    }
+    
+    public override func hasBeenAddedToLogger(logger: XCGLogger) {
+        super.hasBeenAddedToLogger(logger)
+        openFile(logger)
     }
 }
 
@@ -489,16 +525,6 @@ public class XCGLogger: CustomDebugStringConvertible {
         }
     }
 
-    public var xcodeColorsEnabled: Bool = false
-    public var xcodeColors: [XCGLogger.LogLevel: XCGLogger.XcodeColor] = [
-        .Verbose: .lightGrey,
-        .Debug: .darkGrey,
-        .Info: .blue,
-        .Warning: .orange,
-        .Error: .red,
-        .Severe: .whiteOnRed
-    ]
-
     // MARK: - Properties
     public class var logQueue: dispatch_queue_t {
         struct Statics {
@@ -508,24 +534,6 @@ public class XCGLogger: CustomDebugStringConvertible {
         return Statics.logQueue
     }
 
-    private var _dateFormatter: NSDateFormatter? = nil
-    public var dateFormatter: NSDateFormatter? {
-        get {
-            if _dateFormatter != nil {
-                return _dateFormatter
-            }
-
-            let defaultDateFormatter = NSDateFormatter()
-            defaultDateFormatter.locale = NSLocale.currentLocale()
-            defaultDateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-            _dateFormatter = defaultDateFormatter
-
-            return _dateFormatter
-        }
-        set {
-            _dateFormatter = newValue
-        }
-    }
 
     public var logDestinations: Array<XCGLogDestinationProtocol> = []
 
@@ -533,14 +541,9 @@ public class XCGLogger: CustomDebugStringConvertible {
     public init(identifier: String = "", includeDefaultDestinations: Bool = true) {
         self.identifier = identifier
 
-        // Check if XcodeColors is installed and enabled
-        if let xcodeColors = NSProcessInfo.processInfo().environment["XcodeColors"] {
-            xcodeColorsEnabled = xcodeColors == "YES"
-        }
-
         if includeDefaultDestinations {
             // Setup a standard console log destination
-            addLogDestination(XCGConsoleLogDestination(owner: self, identifier: XCGLogger.Constants.baseConsoleLogDestinationIdentifier))
+            addLogDestination(XCGConsoleLogDestination(identifier: XCGLogger.Constants.baseConsoleLogDestinationIdentifier))
         }
     }
 
@@ -610,7 +613,7 @@ public class XCGLogger: CustomDebugStringConvertible {
             if (logDestination.isEnabledForLogLevel(logLevel)) {
                 if logDetails == nil {
                     if let logMessage = closure() {
-                        logDetails = XCGLogDetails(logLevel: logLevel, date: NSDate(), logMessage: logMessage, functionName: functionName, fileName: fileName, lineNumber: lineNumber)
+                        logDetails = XCGLogDetails(logger: self, logLevel: logLevel, date: NSDate(), logMessage: logMessage, functionName: functionName, fileName: fileName, lineNumber: lineNumber)
                     }
                     else {
                         break
@@ -650,8 +653,8 @@ public class XCGLogger: CustomDebugStringConvertible {
         let processInfo: NSProcessInfo = NSProcessInfo.processInfo()
         let XCGLoggerVersionNumber = XCGLogger.Constants.versionString
 
-        let logDetails: Array<XCGLogDetails> = [XCGLogDetails(logLevel: .Info, date: date, logMessage: "\(processInfo.processName) \(buildString)PID: \(processInfo.processIdentifier)", functionName: "", fileName: "", lineNumber: 0),
-            XCGLogDetails(logLevel: .Info, date: date, logMessage: "XCGLogger Version: \(XCGLoggerVersionNumber) - LogLevel: \(outputLogLevel)", functionName: "", fileName: "", lineNumber: 0)]
+        let logDetails: Array<XCGLogDetails> = [XCGLogDetails(logger: self, logLevel: .Info, date: date, logMessage: "\(processInfo.processName) \(buildString)PID: \(processInfo.processIdentifier)", functionName: "", fileName: "", lineNumber: 0),
+            XCGLogDetails(logger: self, logLevel: .Info, date: date, logMessage: "XCGLogger Version: \(XCGLoggerVersionNumber) - LogLevel: \(outputLogLevel)", functionName: "", fileName: "", lineNumber: 0)]
 
         for logDestination in (selectedLogDestination != nil ? [selectedLogDestination!] : logDestinations) {
             for logDetail in logDetails {
@@ -843,7 +846,9 @@ public class XCGLogger: CustomDebugStringConvertible {
             return false
         }
 
+        logDestination.willBeAddedToLogger(self)
         logDestinations.append(logDestination)
+        logDestination.hasBeenAddedToLogger(self)
         return true
     }
 
@@ -862,7 +867,7 @@ public class XCGLogger: CustomDebugStringConvertible {
         for logDestination in self.logDestinations {
             if (logDestination.isEnabledForLogLevel(logLevel)) {
                 if logDetails == nil {
-                    logDetails = XCGLogDetails(logLevel: logLevel, date: NSDate(), logMessage: logMessage, functionName: "", fileName: "", lineNumber: 0)
+                    logDetails = XCGLogDetails(logger: self, logLevel: logLevel, date: NSDate(), logMessage: logMessage, functionName: "", fileName: "", lineNumber: 0)
                 }
 
                 logDestination.processInternalLogDetails(logDetails!)
